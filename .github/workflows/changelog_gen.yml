@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - main
     paths-ignore:
       - '.github/workflows/**'
   # Das hier macht den Workflow wiederverwendbar für all deine anderen Repos!
