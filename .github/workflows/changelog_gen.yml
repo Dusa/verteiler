@@ -36,15 +36,19 @@ jobs:
           # Den temporären Ordner wieder löschen, damit er nicht stört
           rm -rf _verteiler_temp
 
-      # --- TEIL 1: Letzte Commit-Nachricht holen ---
-      - name: Get Merge Message and Date
+      # --- TEIL 1: ALLE Commit-Nachrichten dieses Pushes holen ---
+      - name: Get Commit Messages and Date
         id: vars
         run: |
-          # --no-merges ignoriert automatische Git-Merge-Commits
-          MSG=$(git log -1 --no-merges --pretty=%B)
+          # Prüfen ob Event-Daten vorhanden sind, um ALLE Commits des Pushes zu erfassen
+          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] && [ -n "${{ github.event.before }}" ]; then
+            git log ${{ github.event.before }}..${{ github.sha }} --no-merges --pretty=%B > msg.txt || git log -3 --no-merges --pretty=%B > msg.txt
+          else
+            git log -3 --no-merges --pretty=%B > msg.txt
+          fi
+          
           DATE=$(date +"%d.%m.%Y")
           echo "date=$DATE" >> $GITHUB_OUTPUT
-          echo "$MSG" > msg.txt
 
       # --- TEIL 2: KI Übersetzung und Formatierung ---
       - name: AI Translation via GitHub Copilot / Models
@@ -57,7 +61,7 @@ jobs:
               "messages": [
                 {
                   "role": "system", 
-                  "content": "Du bist ein technischer Redakteur. Übersetze die Commit-Nachricht ins Deutsche. Ignoriere dabei automatische Git-Texte wie Merge branch oder Merge pull request. Fasse alle inhaltlichen Änderungen (auch Listen und mehrere Punkte) in einem einzigen, flüssigen Satz zusammen. Verwende keine Aufzählungszeichen und absolut keine Zeilenumbrüche! Gib NUR diese eine Zeile zurück. Beginne zwingend mit einer dieser Kategorien: [NEU], [GEÄNDERT], [ENTFERNT], [BEHOBEN]."
+                  "content": "Du bist ein technischer Redakteur. Übersetze die bereitgestellten Commit-Nachrichten ins Deutsche. Ignoriere dabei automatische Git-Texte wie Merge branch oder Merge pull request. Fasse alle inhaltlichen Änderungen ALLER übergebenen Commits (auch Listen und mehrere Punkte) in einem einzigen, flüssigen Satz zusammen. Verwende keine Aufzählungszeichen und absolut keine Zeilenumbrüche! Gib NUR diese eine Zeile zurück. Beginne zwingend mit einer dieser Kategorien: [NEU], [GEÄNDERT], [ENTFERNT], [BEHOBEN]."
                 },
                 {
                   "role": "user", 
@@ -75,13 +79,13 @@ jobs:
           USER_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null || echo "")
           
           if [ "$USER_TEXT" == "null" ] || [ -z "$USER_TEXT" ]; then 
-            # Besserer Fallback: Entfernt "Merge..." Texte, wandelt Zeilenumbrüche in Leerzeichen um und nimmt die ersten 150 Zeichen
-            CLEAN_FALLBACK=$(cat msg.txt | grep -v -i "^Merge" | tr '\n' ' ' | tr -s ' ' | cut -c1-150)
-            USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK"
+            # Besserer Fallback: Nimmt nun die ersten 300 Zeichen und fügt ... hinzu
+            CLEAN_FALLBACK=$(cat msg.txt | grep -v -i "^Merge" | tr '\n' ' ' | tr -s ' ' | cut -c1-300)
+            USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK..."
           fi
           
-          # Sicherheitsnetz: Garantiert alle Zeilenumbrüche entfernen, falls die KI sich nicht an die Regeln hält
-          USER_TEXT=$(echo "$USER_TEXT" | tr '\n' ' ' | tr -s ' ' | xargs)
+          # Sicherheitsnetz: Garantiert alle Zeilenumbrüche sicher entfernen (ohne xargs, um Anführungszeichen-Bugs zu vermeiden)
+          USER_TEXT=$(printf '%s' "$USER_TEXT" | tr '\n' ' ' | tr -s ' ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
           
           echo "user_text=$USER_TEXT" >> $GITHUB_OUTPUT
 
