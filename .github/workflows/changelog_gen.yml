@@ -1,0 +1,243 @@
+name: Auto-Changelog Generator
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '.github/workflows/**'
+  # Das hier macht den Workflow wiederverwendbar für all deine anderen Repos!
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  update-changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --- TEIL 1: Letzte Commit-Nachricht holen ---
+      - name: Get Merge Message and Date
+        id: vars
+        run: |
+          # --no-merges ignoriert automatische Git-Merge-Commits
+          MSG=$(git log -1 --no-merges --pretty=%B)
+          DATE=$(date +"%d.%m.%Y")
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "$MSG" > msg.txt
+
+      # --- TEIL 2: KI Übersetzung und Formatierung ---
+      - name: AI Translation via GitHub Copilot / Models
+        id: ai
+        run: |
+          JSON_PAYLOAD=$(jq -n \
+            --arg msg "$(cat msg.txt)" \
+            '{
+              "model": "gpt-4o",
+              "messages": [
+                {
+                  "role": "system", 
+                  "content": "Du bist ein technischer Redakteur. Übersetze die Commit-Nachricht ins Deutsche. Ignoriere dabei automatische Git-Texte wie Merge branch oder Merge pull request. Fasse alle inhaltlichen Änderungen (auch Listen und mehrere Punkte) in einem einzigen, flüssigen Satz zusammen. Verwende keine Aufzählungszeichen und absolut keine Zeilenumbrüche! Gib NUR diese eine Zeile zurück. Beginne zwingend mit einer dieser Kategorien: [NEU], [GEÄNDERT], [ENTFERNT], [BEHOBEN]."
+                },
+                {
+                  "role": "user", 
+                  "content": $msg
+                }
+              ]
+            }')
+          
+          # SICHERHEITS-FIX für Reusable Workflows: github.token nutzen statt secrets.GITHUB_TOKEN
+          RESPONSE=$(curl -s -X POST "https://models.inference.ai.azure.com/chat/completions" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD")
+            
+          USER_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null || echo "")
+          
+          if [ "$USER_TEXT" == "null" ] || [ -z "$USER_TEXT" ]; then 
+            # Besserer Fallback: Entfernt "Merge..." Texte, wandelt Zeilenumbrüche in Leerzeichen um und nimmt die ersten 150 Zeichen
+            CLEAN_FALLBACK=$(cat msg.txt | grep -v -i "^Merge" | tr '\n' ' ' | tr -s ' ' | cut -c1-150)
+            USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK"
+          fi
+          
+          # Sicherheitsnetz: Garantiert alle Zeilenumbrüche entfernen, falls die KI sich nicht an die Regeln hält
+          USER_TEXT=$(echo "$USER_TEXT" | tr '\n' ' ' | tr -s ' ' | xargs)
+          
+          echo "user_text=$USER_TEXT" >> $GITHUB_OUTPUT
+
+      # --- TEIL 3: MD und HTML generieren ---
+      - name: Update CHANGELOG.md
+        env:
+          # SICHERHEITS-FIX: Variablen als Environment übergeben, damit Anführungszeichen 
+          # in der Commit-Nachricht nicht das Bash-Skript sprengen!
+          DATE: ${{ steps.vars.outputs.date }}
+          ENTRY: ${{ steps.ai.outputs.user_text }}
+        run: |
+          CAT=$(echo "$ENTRY" | grep -oE "\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]" | tr -d '[]' || echo "GEÄNDERT")
+          
+          # SICHERHEITS-FIX: Non-greedy Regex nutzen, damit z.B. "[NEU] Fix [Login]" nicht kaputt geht
+          CLEAN_TEXT=$(echo "$ENTRY" | sed -E 's/^\[[^]]+\][[:space:]]*//')
+
+          # Neue Zeile für das Markdown aufbereiten
+          NEW_LINE="* **$CAT**: $CLEAN_TEXT"
+          
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Changelog" > CHANGELOG.md
+          fi
+
+          if grep -q "## $DATE" CHANGELOG.md; then
+            # SICHERHEITS-FIX: AWK statt SED nutzen. SED bricht ab, wenn in NEW_LINE ein Slash '/' vorkommt.
+            awk -v date="## $DATE" -v newline="$NEW_LINE" '
+              $0 == date { print; print newline; next }
+              { print }
+            ' CHANGELOG.md > temp.md && mv temp.md CHANGELOG.md
+          else
+            echo "# Changelog" > temp.md
+            echo "" >> temp.md
+            echo "## $DATE" >> temp.md
+            echo "$NEW_LINE" >> temp.md
+            echo "" >> temp.md
+            tail -n +2 CHANGELOG.md >> temp.md
+            mv temp.md CHANGELOG.md
+          fi
+
+      - name: Generate CHANGELOG.html
+        run: |
+          cat << 'EOF' > CHANGELOG.html
+          <!DOCTYPE html>
+          <html lang="de">
+          <head>
+            <meta charset="UTF-8">
+            <title>Changelog</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; color: #333; }
+              h1 { border-bottom: 2px solid #eaecef; padding-bottom: 10px; margin-bottom: 30px; }
+              details { margin-bottom: 15px; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
+              summary { cursor: pointer; color: #0366d6; font-size: 1.5em; font-weight: bold; outline: none; padding: 5px 0; display: flex; align-items: center; }
+              summary:hover { color: #005cc5; }
+              .copy-link { margin-left: 10px; cursor: pointer; font-size: 0.6em; color: #6a737d; opacity: 0; transition: all 0.2s; background: none; border: none; padding: 4px; border-radius: 4px; }
+              summary:hover .copy-link { opacity: 1; }
+              .copy-link:hover { background-color: #f6f8fa; color: #0366d6; }
+              li { margin-bottom: 8px; }
+            </style>
+          </head>
+          <body>
+          EOF
+          
+          npx --yes marked < CHANGELOG.md >> CHANGELOG.html
+          
+          cat << 'EOF' >> CHANGELOG.html
+          <script>
+            document.addEventListener("DOMContentLoaded", () => {
+              // Alle H2 Überschriften (Daten) finden
+              const headers = document.querySelectorAll("h2");
+              
+              headers.forEach(h2 => {
+                const dateStr = h2.innerText.trim();
+                
+                // Native HTML Accordion Elemente erstellen
+                const details = document.createElement("details");
+                const summary = document.createElement("summary");
+                
+                // Text für das Datum
+                const titleText = document.createElement("span");
+                titleText.textContent = dateStr;
+                
+                // Kopier-Button / Icon erstellen
+                const linkIcon = document.createElement("span");
+                linkIcon.className = "copy-link";
+                linkIcon.innerHTML = "🔗";
+                linkIcon.title = "Link zu diesem Eintrag kopieren";
+                
+                // Klick-Event fürs Kopieren in den Zwischenspeicher
+                linkIcon.onclick = (e) => {
+                  e.preventDefault(); // Verhindert, dass das Accordion zu/aufklappt
+                  e.stopPropagation();
+                  
+                  // Komplette URL zusammenbauen (ohne alte Hashes)
+                  const url = window.location.href.split('#')[0] + "#" + dateStr;
+                  
+                  // Unsichtbares Textfeld nutzen (Funktioniert auch bei lokalen Dateien)
+                  const tempInput = document.createElement("input");
+                  tempInput.value = url;
+                  document.body.appendChild(tempInput);
+                  tempInput.select();
+                  document.execCommand("copy");
+                  document.body.removeChild(tempInput);
+                  
+                  // Visuelles Feedback für den User
+                  linkIcon.innerHTML = "✅";
+                  setTimeout(() => { linkIcon.innerHTML = "🔗"; }, 2000);
+                };
+                
+                summary.appendChild(titleText);
+                summary.appendChild(linkIcon);
+                details.id = dateStr;
+                
+                h2.parentNode.insertBefore(details, h2);
+                details.appendChild(summary);
+                
+                // Alle Listen-Elemente bis zum nächsten H2 in <details> verschieben
+                let nextNode = h2.nextSibling;
+                while (nextNode && nextNode.nodeName !== "H2") {
+                  let current = nextNode;
+                  nextNode = nextNode.nextSibling;
+                  details.appendChild(current);
+                }
+                
+                h2.remove(); // Das alte H2 entfernen
+              });
+
+              // Funktion um auf den URL-Hash (Anker) zu reagieren
+              function handleHash() {
+                const hash = decodeURIComponent(window.location.hash.substring(1));
+                const allDetails = document.querySelectorAll("details");
+                
+                // Wenn KEIN Parameter da ist: Nur das allererste (neueste) aufklappen
+                if (!hash) {
+                  allDetails.forEach((d, index) => {
+                    d.open = (index === 0);
+                  });
+                  return;
+                }
+                
+                // Wenn ein Parameter da ist: Entsprechendes aufklappen und hinscrollen
+                allDetails.forEach(d => {
+                  if (d.id === hash) {
+                    d.open = true;
+                    setTimeout(() => d.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+                  } else {
+                    d.open = false; 
+                  }
+                });
+              }
+
+              // Beim ersten Laden und bei jeder Anker-Änderung ausführen
+              handleHash();
+              window.addEventListener("hashchange", handleHash);
+            });
+          </script>
+          </body>
+          </html>
+          EOF
+
+      # --- TEIL 4: Alles zusammen pushen ---
+      - name: Commit and Push
+        run: |
+          git config user.name "NudlDudl Bot"
+          git config user.email "nudldudl.bot@users.noreply.github.com"
+          
+          # Neue Changelog-Dateien hinzufügen
+          git add CHANGELOG.md CHANGELOG.html
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: auto-update changelog [skip ci]"
+            git push
+          else
+            echo "Keine Änderungen zum Committen gefunden."
+          fi
