@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Changelog</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; color: #333; }
+    h1 { border-bottom: 2px solid #eaecef; padding-bottom: 10px; margin-bottom: 30px; }
+    details { margin-bottom: 15px; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
+    summary { cursor: pointer; color: #0366d6; font-size: 1.5em; font-weight: bold; outline: none; padding: 5px 0; display: flex; align-items: center; }
+    summary:hover { color: #005cc5; }
+    .copy-link { margin-left: 10px; cursor: pointer; font-size: 0.6em; color: #6a737d; opacity: 0; transition: all 0.2s; background: none; border: none; padding: 4px; border-radius: 4px; }
+    summary:hover .copy-link { opacity: 1; }
+    .copy-link:hover { background-color: #f6f8fa; color: #0366d6; }
+    li { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+<h1>Changelog</h1>
+<h2>24.03.2026</h2>
+<ul>
+<li><strong>GEÄNDERT</strong>: Add files via upload</li>
+</ul>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    // Alle H2 Überschriften (Daten) finden
+    const headers = document.querySelectorAll("h2");
+    
+    headers.forEach(h2 => {
+      const dateStr = h2.innerText.trim();
+      
+      // Native HTML Accordion Elemente erstellen
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      
+      // Text für das Datum
+      const titleText = document.createElement("span");
+      titleText.textContent = dateStr;
+      
+      // Kopier-Button / Icon erstellen
+      const linkIcon = document.createElement("span");
+      linkIcon.className = "copy-link";
+      linkIcon.innerHTML = "🔗";
+      linkIcon.title = "Link zu diesem Eintrag kopieren";
+      
+      // Klick-Event fürs Kopieren in den Zwischenspeicher
+      linkIcon.onclick = (e) => {
+        e.preventDefault(); // Verhindert, dass das Accordion zu/aufklappt
+        e.stopPropagation();
+        
+        // Komplette URL zusammenbauen (ohne alte Hashes)
+        const url = window.location.href.split('#')[0] + "#" + dateStr;
+        
+        // Unsichtbares Textfeld nutzen (Funktioniert auch bei lokalen Dateien)
+        const tempInput = document.createElement("input");
+        tempInput.value = url;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand("copy");
+        document.body.removeChild(tempInput);
+        
+        // Visuelles Feedback für den User
+        linkIcon.innerHTML = "✅";
+        setTimeout(() => { linkIcon.innerHTML = "🔗"; }, 2000);
+      };
+      
+      summary.appendChild(titleText);
+      summary.appendChild(linkIcon);
+      details.id = dateStr;
+      
+      h2.parentNode.insertBefore(details, h2);
+      details.appendChild(summary);
+      
+      // Alle Listen-Elemente bis zum nächsten H2 in <details> verschieben
+      let nextNode = h2.nextSibling;
+      while (nextNode && nextNode.nodeName !== "H2") {
+        let current = nextNode;
+        nextNode = nextNode.nextSibling;
+        details.appendChild(current);
+      }
+      
+      h2.remove(); // Das alte H2 entfernen
+    });
+
+    // Funktion um auf den URL-Hash (Anker) zu reagieren
+    function handleHash() {
+      const hash = decodeURIComponent(window.location.hash.substring(1));
+      const allDetails = document.querySelectorAll("details");
+      
+      // Wenn KEIN Parameter da ist: Nur das allererste (neueste) aufklappen
+      if (!hash) {
+        allDetails.forEach((d, index) => {
+          d.open = (index === 0);
+        });
+        return;
+      }
+      
+      // Wenn ein Parameter da ist: Entsprechendes aufklappen und hinscrollen
+      allDetails.forEach(d => {
+        if (d.id === hash) {
+          d.open = true;
+          setTimeout(() => d.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+        } else {
+          d.open = false; 
+        }
+      });
+    }
+
+    // Beim ersten Laden und bei jeder Anker-Änderung ausführen
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+  });
+</script>
+</body>
+</html>
