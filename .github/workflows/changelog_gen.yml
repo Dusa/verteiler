@@ -145,16 +145,21 @@ jobs:
           <html lang="de">
           <head>
             <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Changelog</title>
             <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; color: #333; }
-              h1 { border-bottom: 2px solid #eaecef; padding-bottom: 10px; margin-bottom: 30px; }
-              details { margin-bottom: 15px; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
-              summary { cursor: pointer; color: #0366d6; font-size: 1.5em; font-weight: bold; outline: none; padding: 5px 0; display: flex; align-items: center; }
-              summary:hover { color: #005cc5; }
-              .copy-link { margin-left: 10px; cursor: pointer; font-size: 0.6em; color: #6a737d; opacity: 0; transition: all 0.2s; background: none; border: none; padding: 4px; border-radius: 4px; }
+              :root { --bg: #ffffff; --text: #333333; --border: #eaecef; --link: #0366d6; --link-hover: #005cc5; --icon-hover: #f6f8fa; }
+              @media (prefers-color-scheme: dark) {
+                :root { --bg: #0d1117; --text: #c9d1d9; --border: #30363d; --link: #58a6ff; --link-hover: #79c0ff; --icon-hover: #21262d; }
+              }
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; background-color: var(--bg); color: var(--text); }
+              h1 { border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-bottom: 30px; }
+              details { margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+              summary { cursor: pointer; color: var(--link); font-size: 1.5em; font-weight: bold; outline: none; padding: 5px 0; display: flex; align-items: center; }
+              summary:hover { color: var(--link-hover); }
+              .copy-link { margin-left: 10px; cursor: pointer; font-size: 0.6em; color: var(--text); opacity: 0; transition: all 0.2s; background: none; border: none; padding: 4px; border-radius: 4px; }
               summary:hover .copy-link { opacity: 1; }
-              .copy-link:hover { background-color: #f6f8fa; color: #0366d6; }
+              .copy-link:hover { background-color: var(--icon-hover); color: var(--link); }
               li { margin-bottom: 8px; }
             </style>
           </head>
