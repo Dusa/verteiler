@@ -19,6 +19,8 @@ jobs:
     env:
       LC_ALL: C.UTF-8
       LANG: C.UTF-8
+      # Setzt die Zeitzone für alle Befehle auf Wien (berücksichtigt Sommer- und Winterzeit automatisch)
+      TZ: Europe/Vienna
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
