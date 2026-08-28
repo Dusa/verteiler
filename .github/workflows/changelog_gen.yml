@@ -51,7 +51,9 @@ jobs:
           fi
           
           DATE=$(date +"%d.%m.%Y")
+          BUILD=$(date +"%Y%m%d_%H%M")
           echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "build=$BUILD" >> $GITHUB_OUTPUT
 
       # --- TEIL 2: KI Übersetzung und Formatierung ---
       - name: AI Translation via GitHub Copilot / Models
@@ -73,21 +75,24 @@ jobs:
               ]
             }')
           
-          # SICHERHEITS-FIX für Reusable Workflows: github.token nutzen statt secrets.GITHUB_TOKEN
           RESPONSE=$(curl -s -X POST "https://models.inference.ai.azure.com/chat/completions" \
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Content-Type: application/json" \
-            -d "$JSON_PAYLOAD")
+            -d "$JSON_PAYLOAD" || true)
             
           USER_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null || echo "")
           
           if [ "$USER_TEXT" == "null" ] || [ -z "$USER_TEXT" ]; then 
-            # Besserer Fallback: Nimmt nun die ersten 300 Zeichen und fügt ... hinzu
-            CLEAN_FALLBACK=$(cat msg.txt | grep -v -i "^Merge" | tr '\n' ' ' | tr -s ' ' | cut -c1-300)
+            # Absicherung gegen Pipe-Fails (Exit Code 1 bei grep), falls es keine reinen Merge-Commits gibt
+            CLEAN_FALLBACK=$(grep -v -i "^Merge" msg.txt || true)
+            # Falls die Datei leer gefiltert wurde, nimm alles
+            if [ -z "$CLEAN_FALLBACK" ]; then CLEAN_FALLBACK=$(cat msg.txt); fi
+            
+            CLEAN_FALLBACK=$(echo "$CLEAN_FALLBACK" | tr '\n' ' ' | tr -s ' ' | cut -c1-300)
             USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK..."
           fi
           
-          # Sicherheitsnetz: Garantiert alle Zeilenumbrüche sicher entfernen (ohne xargs, um Anführungszeichen-Bugs zu vermeiden)
+          # Sicherheitsnetz: Garantiert alle Zeilenumbrüche sicher entfernen
           USER_TEXT=$(printf '%s' "$USER_TEXT" | tr '\n' ' ' | tr -s ' ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
           
           echo "user_text=$USER_TEXT" >> $GITHUB_OUTPUT
@@ -95,25 +100,28 @@ jobs:
       # --- TEIL 3: MD und HTML generieren ---
       - name: Update CHANGELOG.md
         env:
-          # SICHERHEITS-FIX: Variablen als Environment übergeben, damit Anführungszeichen 
-          # in der Commit-Nachricht nicht das Bash-Skript sprengen!
           DATE: ${{ steps.vars.outputs.date }}
+          BUILD: ${{ steps.vars.outputs.build }}
           ENTRY: ${{ steps.ai.outputs.user_text }}
         run: |
-          CAT=$(echo "$ENTRY" | grep -oE "\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]" | tr -d '[]' || echo "GEÄNDERT")
+          # Sicherstellen, dass grep nicht abstürzt, wenn es das Tag nicht findet
+          CAT_EXTRACT=$(echo "$ENTRY" | grep -oE "\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]" || true)
+          CAT=$(echo "$CAT_EXTRACT" | tr -d '[]')
           
-          # SICHERHEITS-FIX: Non-greedy Regex nutzen, damit z.B. "[NEU] Fix [Login]" nicht kaputt geht
+          if [ -z "$CAT" ]; then
+            CAT="GEÄNDERT"
+          fi
+          
           CLEAN_TEXT=$(echo "$ENTRY" | sed -E 's/^\[[^]]+\][[:space:]]*//')
-
-          # Neue Zeile für das Markdown aufbereiten
-          NEW_LINE="* **$CAT**: $CLEAN_TEXT"
+          
+          # Build-Nummer direkt neben der Kategorie einfügen
+          NEW_LINE="* **$CAT** (Build $BUILD): $CLEAN_TEXT"
           
           if [ ! -f CHANGELOG.md ]; then
             echo "# Changelog" > CHANGELOG.md
           fi
 
           if grep -q "## $DATE" CHANGELOG.md; then
-            # SICHERHEITS-FIX: AWK statt SED nutzen. SED bricht ab, wenn in NEW_LINE ein Slash '/' vorkommt.
             awk -v date="## $DATE" -v newline="$NEW_LINE" '
               $0 == date { print; print newline; next }
               { print }
@@ -151,40 +159,32 @@ jobs:
           <body>
           EOF
           
+          # Marked direkt ausführen (ohne globale Admin-Rechte zu benötigen)
           npx --yes marked < CHANGELOG.md >> CHANGELOG.html
           
           cat << 'EOF' >> CHANGELOG.html
           <script>
             document.addEventListener("DOMContentLoaded", () => {
-              // Alle H2 Überschriften (Daten) finden
               const headers = document.querySelectorAll("h2");
               
               headers.forEach(h2 => {
                 const dateStr = h2.innerText.trim();
-                
-                // Native HTML Accordion Elemente erstellen
                 const details = document.createElement("details");
                 const summary = document.createElement("summary");
                 
-                // Text für das Datum
                 const titleText = document.createElement("span");
                 titleText.textContent = dateStr;
                 
-                // Kopier-Button / Icon erstellen
                 const linkIcon = document.createElement("span");
                 linkIcon.className = "copy-link";
                 linkIcon.innerHTML = "🔗";
                 linkIcon.title = "Link zu diesem Eintrag kopieren";
                 
-                // Klick-Event fürs Kopieren in den Zwischenspeicher
                 linkIcon.onclick = (e) => {
-                  e.preventDefault(); // Verhindert, dass das Accordion zu/aufklappt
+                  e.preventDefault();
                   e.stopPropagation();
                   
-                  // Komplette URL zusammenbauen (ohne alte Hashes)
                   const url = window.location.href.split('#')[0] + "#" + dateStr;
-                  
-                  // Unsichtbares Textfeld nutzen (Funktioniert auch bei lokalen Dateien)
                   const tempInput = document.createElement("input");
                   tempInput.value = url;
                   document.body.appendChild(tempInput);
@@ -192,7 +192,6 @@ jobs:
                   document.execCommand("copy");
                   document.body.removeChild(tempInput);
                   
-                  // Visuelles Feedback für den User
                   linkIcon.innerHTML = "✅";
                   setTimeout(() => { linkIcon.innerHTML = "🔗"; }, 2000);
                 };
@@ -204,7 +203,6 @@ jobs:
                 h2.parentNode.insertBefore(details, h2);
                 details.appendChild(summary);
                 
-                // Alle Listen-Elemente bis zum nächsten H2 in <details> verschieben
                 let nextNode = h2.nextSibling;
                 while (nextNode && nextNode.nodeName !== "H2") {
                   let current = nextNode;
@@ -212,15 +210,13 @@ jobs:
                   details.appendChild(current);
                 }
                 
-                h2.remove(); // Das alte H2 entfernen
+                h2.remove();
               });
 
-              // Funktion um auf den URL-Hash (Anker) zu reagieren
               function handleHash() {
                 const hash = decodeURIComponent(window.location.hash.substring(1));
                 const allDetails = document.querySelectorAll("details");
                 
-                // Wenn KEIN Parameter da ist: Nur das allererste (neueste) aufklappen
                 if (!hash) {
                   allDetails.forEach((d, index) => {
                     d.open = (index === 0);
@@ -228,7 +224,6 @@ jobs:
                   return;
                 }
                 
-                // Wenn ein Parameter da ist: Entsprechendes aufklappen und hinscrollen
                 allDetails.forEach(d => {
                   if (d.id === hash) {
                     d.open = true;
@@ -239,7 +234,6 @@ jobs:
                 });
               }
 
-              // Beim ersten Laden und bei jeder Anker-Änderung ausführen
               handleHash();
               window.addEventListener("hashchange", handleHash);
             });
@@ -250,9 +244,10 @@ jobs:
 
       # --- TEIL 3.5: Globale Konfigurationsdatei updaten ---
       - name: Update Global Configuration
+        env:
+          BUILD_VAL: ${{ steps.vars.outputs.build }}
         run: |
           DATE_VAL=$(date +"%Y-%m-%d")
-          BUILD_VAL=$(date +"%Y%m%d_%H%M")
           
           CONF_FILE=""
           if [ -f "global_settings.php" ]; then
@@ -287,7 +282,6 @@ jobs:
           git config user.name "NudlDudl Bot"
           git config user.email "nudldudl.bot@users.noreply.github.com"
           
-          # Neue Changelog-Dateien, verteilte Dateien und ggf. angepasste Konfigurationsdatei hinzufügen
           git add CHANGELOG.md CHANGELOG.html .editorconfig
           if [ -f "global_settings.php" ]; then git add global_settings.php; fi
           if [ -f "global_config.php" ]; then git add global_config.php; fi
