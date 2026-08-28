@@ -36,14 +36,18 @@ jobs:
 
       - name: Copy central files
         run: |
-          # Zentrale Dateien aus dem Verteiler ins aktuelle Repo kopieren
-          if [ -f "_verteiler_temp/.editorconfig" ]; then cp _verteiler_temp/.editorconfig ./.editorconfig; fi
-          if [ -f "_verteiler_temp/logo_55.bmp" ]; then cp _verteiler_temp/logo_55.bmp ./logo_55.bmp; fi
-          if [ -f "_verteiler_temp/logo_seitlich.bmp" ]; then cp _verteiler_temp/logo_seitlich.bmp ./logo_seitlich.bmp; fi
+          # Liste aller Dateien im Verteiler erstellen (außer .git, .github und README)
+          cd _verteiler_temp
+          find . -type f -not -path "*/\.git/*" -not -path "*/\.github/*" -not -name "README.md" > ../verteiler_files.txt
+          cd ..
           
-          # Den temporären Ordner wieder löschen, damit er nicht stört
+          # Alle gefundenen Dateien inkl. Ordnerstruktur ins aktuelle Repo synchronisieren
+          rsync -av --exclude='.git' --exclude='.github' --exclude='README.md' _verteiler_temp/ ./
+          
+          # Den temporären Ordner wieder löschen
           rm -rf _verteiler_temp
 
+          
       # --- TEIL 1: ALLE Commit-Nachrichten dieses Pushes holen ---
       - name: Get Commit Messages and Date
         id: vars
@@ -293,12 +297,17 @@ jobs:
           git config user.email "nudldudl.bot@users.noreply.github.com"
           
           git add CHANGELOG.md CHANGELOG.html
-          if [ -f ".editorconfig" ]; then git add .editorconfig; fi
-          if [ -f "logo_55.bmp" ]; then git add logo_55.bmp; fi
-          if [ -f "logo_seitlich.bmp" ]; then git add logo_seitlich.bmp; fi
-          
           if [ -f "global_settings.php" ]; then git add global_settings.php; fi
           if [ -f "global_config.php" ]; then git add global_config.php; fi
+          
+          # Alle dynamisch kopierten Dateien aus dem Verteiler ins Git aufnehmen
+          if [ -f "verteiler_files.txt" ]; then
+            while read -r file; do
+              clean_file=${file#./}
+              git add "$clean_file"
+            done < verteiler_files.txt
+            rm verteiler_files.txt
+          fi
           
           if ! git diff --staged --quiet; then
             git commit -m "chore: auto-update changelog and sync files [skip ci]"
