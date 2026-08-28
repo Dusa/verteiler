@@ -232,7 +232,7 @@ jobs:
                 allDetails.forEach(d => {
                   if (d.id === hash) {
                     d.open = true;
-                    setTimeout(() => d.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+                    setTimeout(() => d.scrolltoView({ behavior: "smooth", block: "start" }), 100);
                   } else {
                     d.open = false; 
                   }
@@ -248,14 +248,49 @@ jobs:
           </html>
           EOF
 
+      # --- TEIL 3.5: Globale Konfigurationsdatei updaten ---
+      - name: Update Global Configuration
+        run: |
+          DATE_VAL=$(date +"%Y-%m-%d")
+          BUILD_VAL=$(date +"%Y%m%d_%H%M")
+          
+          CONF_FILE=""
+          if [ -f "global_settings.php" ]; then
+            CONF_FILE="global_settings.php"
+          elif [ -f "global_config.php" ]; then
+            CONF_FILE="global_config.php"
+          fi
+          
+          if [ -n "$CONF_FILE" ]; then
+            echo "Konfigurationsdatei $CONF_FILE gefunden. Aktualisiere Version..."
+            
+            # APP_VERSION_DATE prüfen und ersetzen oder in Zeile 2 (nach <?php) hinzufügen
+            if grep -q "define_if_not_set('APP_VERSION_DATE'" "$CONF_FILE"; then
+              sed -i "s/define_if_not_set('APP_VERSION_DATE'.*/define_if_not_set('APP_VERSION_DATE', '$DATE_VAL');/" "$CONF_FILE"
+            else
+              sed -i "2i define_if_not_set('APP_VERSION_DATE', '$DATE_VAL');" "$CONF_FILE"
+            fi
+            
+            # APP_VERSION_BUILD prüfen und ersetzen oder in Zeile 2 hinzufügen
+            if grep -q "define_if_not_set('APP_VERSION_BUILD'" "$CONF_FILE"; then
+              sed -i "s/define_if_not_set('APP_VERSION_BUILD'.*/define_if_not_set('APP_VERSION_BUILD', '$BUILD_VAL');/" "$CONF_FILE"
+            else
+              sed -i "2i define_if_not_set('APP_VERSION_BUILD', '$BUILD_VAL');" "$CONF_FILE"
+            fi
+          else
+            echo "Keine global_settings.php oder global_config.php gefunden. Überspringe diesen Schritt."
+          fi
+
       # --- TEIL 4: Alles zusammen pushen ---
       - name: Commit and Push
         run: |
           git config user.name "NudlDudl Bot"
           git config user.email "nudldudl.bot@users.noreply.github.com"
           
-          # Neue Changelog-Dateien und verteilte Dateien hinzufügen
+          # Neue Changelog-Dateien, verteilte Dateien und ggf. angepasste Konfigurationsdatei hinzufügen
           git add CHANGELOG.md CHANGELOG.html .editorconfig
+          if [ -f "global_settings.php" ]; then git add global_settings.php; fi
+          if [ -f "global_config.php" ]; then git add global_config.php; fi
           
           if ! git diff --staged --quiet; then
             git commit -m "chore: auto-update changelog and sync files [skip ci]"
