@@ -36,8 +36,11 @@ jobs:
 
       - name: Copy central files
         run: |
-          # .editorconfig aus dem Verteiler ins aktuelle Repo kopieren
-          cp _verteiler_temp/.editorconfig ./.editorconfig
+          # Zentrale Dateien aus dem Verteiler ins aktuelle Repo kopieren
+          if [ -f "_verteiler_temp/.editorconfig" ]; then cp _verteiler_temp/.editorconfig ./.editorconfig; fi
+          if [ -f "_verteiler_temp/logo_55.bmp" ]; then cp _verteiler_temp/logo_55.bmp ./logo_55.bmp; fi
+          if [ -f "_verteiler_temp/logo_seitlich.bmp" ]; then cp _verteiler_temp/logo_seitlich.bmp ./logo_seitlich.bmp; fi
+          
           # Den temporären Ordner wieder löschen, damit er nicht stört
           rm -rf _verteiler_temp
 
@@ -289,7 +292,11 @@ jobs:
           git config user.name "NudlDudl Bot"
           git config user.email "nudldudl.bot@users.noreply.github.com"
           
-          git add CHANGELOG.md CHANGELOG.html .editorconfig
+          git add CHANGELOG.md CHANGELOG.html
+          if [ -f ".editorconfig" ]; then git add .editorconfig; fi
+          if [ -f "logo_55.bmp" ]; then git add logo_55.bmp; fi
+          if [ -f "logo_seitlich.bmp" ]; then git add logo_seitlich.bmp; fi
+          
           if [ -f "global_settings.php" ]; then git add global_settings.php; fi
           if [ -f "global_config.php" ]; then git add global_config.php; fi
           
