@@ -75,7 +75,7 @@ jobs:
               "messages": [
                 {
                   "role": "system", 
-                  "content": "Du bist ein technischer Redakteur. Übersetze die bereitgestellten Commit-Nachrichten ins Deutsche. Ignoriere dabei automatische Git-Texte wie Merge branch oder Merge pull request. Fasse alle inhaltlichen Änderungen ALLER übergebenen Commits (auch Listen und mehrere Punkte) in einem einzigen, flüssigen Satz zusammen. Verwende keine Aufzählungszeichen und absolut keine Zeilenumbrüche! Gib NUR diese eine Zeile zurück. Beginne zwingend mit einer dieser Kategorien: [NEU], [GEÄNDERT], [ENTFERNT], [BEHOBEN]."
+                  "content": "Du bist ein technischer Redakteur. Übersetze die bereitgestellten Commit-Nachrichten ins Deutsche. Ignoriere dabei automatische Git-Texte wie Merge branch oder Merge pull request. Behalte die gesamte Nachricht bei! Wenn die Nachricht bereits formatiert ist (Absätze, Listen), behalte diese Struktur zwingend bei. Wenn es ein langer unformatierter Text ist, füge sinnvolle Absätze hinzu, um die Lesbarkeit zu verbessern. WICHTIG: Verwende als Zeilenumbrüche AUSSCHLIESSLICH den HTML-Tag <br>. Gib absolut keine echten physischen Zeilenumbrüche (\\n) zurück, die gesamte Ausgabe muss in einer einzigen Zeile stehen! Beginne ganz vorne zwingend mit einer dieser Kategorien: [NEU], [GEÄNDERT], [ENTFERNT], [BEHOBEN]."
                 },
                 {
                   "role": "user", 
@@ -97,11 +97,12 @@ jobs:
             # Falls die Datei leer gefiltert wurde, nimm alles
             if [ -z "$CLEAN_FALLBACK" ]; then CLEAN_FALLBACK=$(cat msg.txt); fi
             
-            CLEAN_FALLBACK=$(echo "$CLEAN_FALLBACK" | tr '\n' ' ' | tr -s ' ' | cut -c1-300)
-            USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK..."
+            # Echte Zeilenumbrüche in <br> umwandeln, um Formatierung im Fallback zu erhalten
+            CLEAN_FALLBACK=$(echo "$CLEAN_FALLBACK" | awk '{printf "%s<br>", $0}' | sed 's/<br>$//')
+            USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK"
           fi
           
-          # Sicherheitsnetz: Garantiert alle Zeilenumbrüche sicher entfernen
+          # Sicherheitsnetz: Garantiert alle echten Zeilenumbrüche sicher entfernen, falls die KI patzt
           USER_TEXT=$(printf '%s' "$USER_TEXT" | tr '\n' ' ' | tr -s ' ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
           
           echo "user_text=$USER_TEXT" >> $GITHUB_OUTPUT
