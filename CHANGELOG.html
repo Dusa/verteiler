@@ -1,0 +1,116 @@
+﻿<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Changelog</title>
+  <style>
+    :root { --bg: #ffffff; --text: #333333; --border: #eaecef; --link: #0366d6; --link-hover: #005cc5; --icon-hover: #f6f8fa; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1117; --text: #c9d1d9; --border: #30363d; --link: #58a6ff; --link-hover: #79c0ff; --icon-hover: #21262d; }
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; background-color: var(--bg); color: var(--text); }
+    h1 { border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-bottom: 30px; }
+    details { margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+    summary { cursor: pointer; color: var(--link); font-size: 1.5em; font-weight: bold; outline: none; padding: 5px 0; display: flex; align-items: center; }
+    summary:hover { color: var(--link-hover); }
+    .copy-link { margin-left: 10px; cursor: pointer; font-size: 0.6em; color: var(--text); opacity: 0; transition: all 0.2s; background: none; border: none; padding: 4px; border-radius: 4px; }
+    summary:hover .copy-link { opacity: 1; }
+    .copy-link:hover { background-color: var(--icon-hover); color: var(--link); }
+    li { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+<h1>Changelog</h1>
+<h2>27.10.2026</h2>
+<ul>
+<li><strong>GEÄNDERT</strong> (Build 20261027_1552): Use original commit text and write changelogs as UTF-8 with BOM</li>
+</ul>
+<p>Drop the GitHub Models call, its fallback, and the models permission.
+Keep changelog, version, and commit behavior, and prefix the generated
+changelog files with a UTF-8 BOM so they match .editorconfig.</p>
+<p>Co-authored-by: Dusa <a href="mailto:Dusa@users.noreply.github.com">Dusa@users.noreply.github.com</a></p>
+<p>Allow manual changelog runs and document the workflow</p>
+<p>Add workflow_dispatch without changing push or workflow_call, grant
+models: read for the GitHub Models call, pass the before SHA through
+the environment, fix scrollIntoView in the changelog HTML, and add a
+German README that matches the workflow.</p>
+<p>Co-authored-by: Dusa <a href="mailto:Dusa@users.noreply.github.com">Dusa@users.noreply.github.com</a></p>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const headers = document.querySelectorAll("h2");
+    
+    headers.forEach(h2 => {
+      const dateStr = h2.innerText.trim();
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      
+      const titleText = document.createElement("span");
+      titleText.textContent = dateStr;
+      
+      const linkIcon = document.createElement("span");
+      linkIcon.className = "copy-link";
+      linkIcon.innerHTML = "🔗";
+      linkIcon.title = "Link zu diesem Eintrag kopieren";
+      
+      linkIcon.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const url = window.location.href.split('#')[0] + "#" + dateStr;
+        const tempInput = document.createElement("input");
+        tempInput.value = url;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand("copy");
+        document.body.removeChild(tempInput);
+        
+        linkIcon.innerHTML = "✅";
+        setTimeout(() => { linkIcon.innerHTML = "🔗"; }, 2000);
+      };
+      
+      summary.appendChild(titleText);
+      summary.appendChild(linkIcon);
+      details.id = dateStr;
+      
+      h2.parentNode.insertBefore(details, h2);
+      details.appendChild(summary);
+      
+      let nextNode = h2.nextSibling;
+      while (nextNode && nextNode.nodeName !== "H2") {
+        let current = nextNode;
+        nextNode = nextNode.nextSibling;
+        details.appendChild(current);
+      }
+      
+      h2.remove();
+    });
+
+    function handleHash() {
+      const hash = decodeURIComponent(window.location.hash.substring(1));
+      const allDetails = document.querySelectorAll("details");
+      
+      if (!hash) {
+        allDetails.forEach((d, index) => {
+          d.open = (index === 0);
+        });
+        return;
+      }
+      
+      allDetails.forEach(d => {
+        if (d.id === hash) {
+          d.open = true;
+          setTimeout(() => d.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+        } else {
+          d.open = false; 
+        }
+      });
+    }
+
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+  });
+</script>
+</body>
+</html>
