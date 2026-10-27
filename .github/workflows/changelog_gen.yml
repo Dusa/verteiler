@@ -9,6 +9,8 @@ on:
       - '.github/workflows/**'
 # Das hier macht den Workflow wiederverwendbar für all deine anderen Repos!
   workflow_call:
+  # Manueller Testlauf. paths-ignore gilt nur für push, nicht für workflow_dispatch.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -51,71 +53,40 @@ jobs:
       # --- TEIL 1: ALLE Commit-Nachrichten dieses Pushes holen ---
       - name: Get Commit Messages and Date
         id: vars
+        env:
+          # Bei workflow_dispatch ist before leer. Beim ersten Push eines neuen Branches ist es die Null-SHA.
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          # Prüfen ob Event-Daten vorhanden sind, um ALLE Commits des Pushes zu erfassen
-          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] && [ -n "${{ github.event.before }}" ]; then
-            git log ${{ github.event.before }}..${{ github.sha }} --no-merges --pretty=%B > msg.txt || git log -3 --no-merges --pretty=%B > msg.txt
+          # Prüfen ob Event-Daten vorhanden sind, um ALLE Commits des Pushes zu erfassen.
+          # Leeres before (manueller Lauf) und die Null-SHA fallen auf die letzten drei Commits zurück.
+          if [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ] && [ -n "$EVENT_BEFORE" ]; then
+            git log "$EVENT_BEFORE".."$EVENT_SHA" --no-merges --pretty=%B > msg.txt || git log -3 --no-merges --pretty=%B > msg.txt
           else
             git log -3 --no-merges --pretty=%B > msg.txt
           fi
           
           DATE=$(date +"%d.%m.%Y")
           BUILD=$(date +"%Y%m%d_%H%M")
-          echo "date=$DATE" >> $GITHUB_OUTPUT
-          echo "build=$BUILD" >> $GITHUB_OUTPUT
-
-      # --- TEIL 2: KI Übersetzung und Formatierung ---
-      - name: AI Translation via GitHub Copilot / Models
-        id: ai
-        run: |
-          JSON_PAYLOAD=$(jq -n \
-            --arg msg "$(cat msg.txt)" \
-            '{
-              "model": "gpt-4o",
-              "messages": [
-                {
-                  "role": "system", 
-                  "content": "Du bist ein technischer Redakteur. Übersetze die bereitgestellten Commit-Nachrichten ins Deutsche. Ignoriere dabei automatische Git-Texte wie Merge branch oder Merge pull request. Behalte die gesamte Nachricht bei! Wenn die Nachricht bereits formatiert ist (Absätze, Listen), behalte diese Struktur zwingend bei. Wenn es ein langer unformatierter Text ist, füge sinnvolle Absätze hinzu, um die Lesbarkeit zu verbessern. WICHTIG: Verwende als Zeilenumbrüche AUSSCHLIESSLICH den HTML-Tag <br>. Gib absolut keine echten physischen Zeilenumbrüche (\\n) zurück, die gesamte Ausgabe muss in einer einzigen Zeile stehen! Beginne ganz vorne zwingend mit einer dieser Kategorien: [NEU], [GEÄNDERT], [ENTFERNT], [BEHOBEN]."
-                },
-                {
-                  "role": "user", 
-                  "content": $msg
-                }
-              ]
-            }')
-          
-          RESPONSE=$(curl -s -X POST "https://models.inference.ai.azure.com/chat/completions" \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "Content-Type: application/json" \
-            -d "$JSON_PAYLOAD" || true)
-            
-          USER_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null || echo "")
-          
-          if [ "$USER_TEXT" == "null" ] || [ -z "$USER_TEXT" ]; then 
-            # Absicherung gegen Pipe-Fails (Exit Code 1 bei grep), falls es keine reinen Merge-Commits gibt
-            CLEAN_FALLBACK=$(grep -v -i "^Merge" msg.txt || true)
-            # Falls die Datei leer gefiltert wurde, nimm alles
-            if [ -z "$CLEAN_FALLBACK" ]; then CLEAN_FALLBACK=$(cat msg.txt); fi
-            
-            # Echte Zeilenumbrüche in <br> umwandeln, um Formatierung im Fallback zu erhalten
-            CLEAN_FALLBACK=$(echo "$CLEAN_FALLBACK" | awk '{printf "%s<br>", $0}' | sed 's/<br>$//')
-            USER_TEXT="[GEÄNDERT] $CLEAN_FALLBACK"
-          fi
-          
-          # Sicherheitsnetz: Garantiert alle echten Zeilenumbrüche sicher entfernen, falls die KI patzt
-          USER_TEXT=$(printf '%s' "$USER_TEXT" | tr '\n' ' ' | tr -s ' ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-          
-          echo "user_text=$USER_TEXT" >> $GITHUB_OUTPUT
+          {
+            echo "date=$DATE"
+            echo "build=$BUILD"
+            # Mehrzeilige Originaltexte; das Trennwort kommt nicht im Skript vor.
+            DELIM="MSG$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+            echo "message<<${DELIM}"
+            cat msg.txt
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
 
       # --- TEIL 3: MD und HTML generieren ---
       - name: Update CHANGELOG.md
         env:
           DATE: ${{ steps.vars.outputs.date }}
           BUILD: ${{ steps.vars.outputs.build }}
-          ENTRY: ${{ steps.ai.outputs.user_text }}
+          ENTRY: ${{ steps.vars.outputs.message }}
         run: |
           # Sicherstellen, dass grep nicht abstürzt, wenn es das Tag nicht findet
-          CAT_EXTRACT=$(echo "$ENTRY" | grep -oE "\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]" || true)
+          CAT_EXTRACT=$(echo "$ENTRY" | grep -oE "\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]" | head -n 1 || true)
           CAT=$(echo "$CAT_EXTRACT" | tr -d '[]')
           
           if [ -z "$CAT" ]; then
@@ -131,24 +102,42 @@ jobs:
             echo "# Changelog" > CHANGELOG.md
           fi
 
+          # Eintrag in eine Datei, damit awk Backslashes im Originaltext nicht als Escape liest.
+          printf '%s\n' "$NEW_LINE" > entry_line.txt
           if grep -q "## $DATE" CHANGELOG.md; then
-            awk -v date="## $DATE" -v newline="$NEW_LINE" '
-              $0 == date { print; print newline; next }
+            awk -v date="## $DATE" '
+              $0 == date {
+                print
+                while ((getline line < "entry_line.txt") > 0) print line
+                close("entry_line.txt")
+                next
+              }
               { print }
             ' CHANGELOG.md > temp.md && mv temp.md CHANGELOG.md
           else
-            echo "# Changelog" > temp.md
-            echo "" >> temp.md
-            echo "## $DATE" >> temp.md
-            echo "$NEW_LINE" >> temp.md
-            echo "" >> temp.md
-            tail -n +2 CHANGELOG.md >> temp.md
-            mv temp.md CHANGELOG.md
+            {
+              echo "# Changelog"
+              echo
+              echo "## $DATE"
+              cat entry_line.txt
+              echo
+              tail -n +2 CHANGELOG.md
+            } > temp.md && mv temp.md CHANGELOG.md
+          fi
+          rm -f entry_line.txt
+
+          # .editorconfig setzt charset=utf-8-bom für alles außer YAML.
+          # Die Shell schreibt sonst UTF-8 ohne BOM.
+          if [ "$(head -c 3 CHANGELOG.md)" != $'\xEF\xBB\xBF' ]; then
+            { printf '\xEF\xBB\xBF'; cat CHANGELOG.md; } > temp.md && mv temp.md CHANGELOG.md
           fi
 
       - name: Generate CHANGELOG.html
         run: |
-          cat << 'EOF' > CHANGELOG.html
+          # BOM nur am Dateianfang. marked bekommt die Markdown-Datei ohne BOM,
+          # sonst landet das BOM mitten im HTML.
+          printf '\xEF\xBB\xBF' > CHANGELOG.html
+          cat << 'EOF' >> CHANGELOG.html
           <!DOCTYPE html>
           <html lang="de">
           <head>
@@ -175,7 +164,11 @@ jobs:
           EOF
           
           # Marked direkt ausführen (ohne globale Admin-Rechte zu benötigen)
-          npx --yes marked < CHANGELOG.md >> CHANGELOG.html
+          if [ "$(head -c 3 CHANGELOG.md)" = $'\xEF\xBB\xBF' ]; then
+            tail -c +4 CHANGELOG.md | npx --yes marked >> CHANGELOG.html
+          else
+            npx --yes marked < CHANGELOG.md >> CHANGELOG.html
+          fi
           
           cat << 'EOF' >> CHANGELOG.html
           <script>
@@ -242,7 +235,7 @@ jobs:
                 allDetails.forEach(d => {
                   if (d.id === hash) {
                     d.open = true;
-                    setTimeout(() => d.scrolltoView({ behavior: "smooth", block: "start" }), 100);
+                    setTimeout(() => d.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
                   } else {
                     d.open = false; 
                   }
