@@ -9,9 +9,13 @@ on:
       - '.github/workflows/**'
 # Das hier macht den Workflow wiederverwendbar für all deine anderen Repos!
   workflow_call:
+  # Manueller Testlauf. paths-ignore gilt nur für push, nicht für workflow_dispatch.
+  workflow_dispatch:
 
 permissions:
   contents: write
+  # Ohne dieses Recht liefert GitHub Models mit github.token 403, und der Schritt fällt still auf den Fallback zurück.
+  models: read
 
 jobs:
   update-changelog:
@@ -51,10 +55,15 @@ jobs:
       # --- TEIL 1: ALLE Commit-Nachrichten dieses Pushes holen ---
       - name: Get Commit Messages and Date
         id: vars
+        env:
+          # Bei workflow_dispatch ist before leer. Beim ersten Push eines neuen Branches ist es die Null-SHA.
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          # Prüfen ob Event-Daten vorhanden sind, um ALLE Commits des Pushes zu erfassen
-          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] && [ -n "${{ github.event.before }}" ]; then
-            git log ${{ github.event.before }}..${{ github.sha }} --no-merges --pretty=%B > msg.txt || git log -3 --no-merges --pretty=%B > msg.txt
+          # Prüfen ob Event-Daten vorhanden sind, um ALLE Commits des Pushes zu erfassen.
+          # Leeres before (manueller Lauf) und die Null-SHA fallen auf die letzten drei Commits zurück.
+          if [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ] && [ -n "$EVENT_BEFORE" ]; then
+            git log "$EVENT_BEFORE".."$EVENT_SHA" --no-merges --pretty=%B > msg.txt || git log -3 --no-merges --pretty=%B > msg.txt
           else
             git log -3 --no-merges --pretty=%B > msg.txt
           fi
@@ -242,7 +251,7 @@ jobs:
                 allDetails.forEach(d => {
                   if (d.id === hash) {
                     d.open = true;
-                    setTimeout(() => d.scrolltoView({ behavior: "smooth", block: "start" }), 100);
+                    setTimeout(() => d.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
                   } else {
                     d.open = false; 
                   }
