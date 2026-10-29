@@ -17,6 +17,10 @@ permissions:
 
 jobs:
   update-changelog:
+    # github.repository gehört bei workflow_call zum Aufrufer, nicht zu Dusa/verteiler.
+    # In diesem Repository (push und workflow_dispatch) läuft der Job nicht:
+    # hier soll kein Changelog entstehen, das später mitverteilt werden könnte.
+    if: ${{ github.repository != 'Dusa/verteiler' }}
     runs-on: ubuntu-latest
     env:
       LC_ALL: C.UTF-8
@@ -38,19 +42,200 @@ jobs:
 
       - name: Copy central files
         run: |
-          # Liste aller Dateien im Verteiler erstellen (außer .git, .github und README)
-          cd _verteiler_temp
-          find . -type f -not -path "*/\.git/*" -not -path "*/\.github/*" -not -name "README.md" > ../verteiler_files.txt
-          cd ..
-          
-          # Alle gefundenen Dateien inkl. Ordnerstruktur ins aktuelle Repo synchronisieren
-          rsync -av --exclude='.git' --exclude='.github' --exclude='README.md' _verteiler_temp/ ./
-          
-          # Den temporären Ordner wieder löschen
+          # Eine Liste für find und rsync. Jeder Name gilt in jedem Verzeichnis.
+          # .verteiler-manifest entsteht erst im Ziel und darf nicht aus dem Verteiler kommen.
+          # global_settings.php und global_config.php gehören dem Ziel: dort setzt der
+          # Workflow nur die Versionskonstanten. Sie werden nicht verteilt.
+          exclude_names=(
+            .git
+            .github
+            README.md
+            CHANGELOG.md
+            CHANGELOG.html
+            msg.txt
+            temp.md
+            entry_line.txt
+            verteiler_files.txt
+            global_settings.php
+            global_config.php
+            .verteiler-manifest
+          )
+
+          find_args=()
+          rsync_args=()
+          for name in "${exclude_names[@]}"; do
+            find_args+=( -not -path "*/${name}/*" -not -name "$name" )
+            rsync_args+=( --exclude="$name" )
+          done
+
+          MANIFEST=.verteiler-manifest
+
+          is_excluded_path() {
+            local path="$1"
+            local base name
+            base=$(basename -- "$path")
+            for name in "${exclude_names[@]}"; do
+              if [ "$path" = "$name" ] || [ "$base" = "$name" ]; then
+                return 0
+              fi
+              case "$path" in
+                "$name"/*|*/"$name"/*)
+                  return 0
+                  ;;
+              esac
+            done
+            return 1
+          }
+
+          # Hartes Verbot, auch wenn ein altes Manifest den Pfad nennt.
+          # Dateinamen gelten in jedem Verzeichnis. .git und .github gelten als
+          # Verzeichnisname überall im Baum.
+          is_protected() {
+            local path="$1"
+            local base
+            base=$(basename -- "$path")
+            case "$path" in
+              .git|.git/*|.github|.github/*|*/.git|*/.git/*|*/.github|*/.github/*)
+                return 0
+                ;;
+            esac
+            case "$base" in
+              README.md|CHANGELOG.md|CHANGELOG.html|global_settings.php|global_config.php|.verteiler-manifest)
+                return 0
+                ;;
+            esac
+            return 1
+          }
+
+          unsafe_path() {
+            local path="$1"
+            case "$path" in
+              ""|/*|..|../*|*/..|*/../*|*$'\n'*)
+                return 0
+                ;;
+            esac
+            return 1
+          }
+
+          cleanup_empty_parents() {
+            local dir
+            dir=$(dirname -- "$1")
+            while [ "$dir" != "." ] && [ -n "$dir" ]; do
+              case "$dir" in
+                .git|.git/*|.github|.github/*|*/.git|*/.git/*|*/.github|*/.github/*)
+                  break
+                  ;;
+              esac
+              if [ ! -e "$dir" ]; then
+                # git rm entfernt ein leer gewordenes Verzeichnis oft selbst.
+                echo "Leeres Verzeichnis entfernt: $dir"
+                dir=$(dirname -- "$dir")
+                continue
+              fi
+              if [ ! -d "$dir" ] || [ -n "$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+                break
+              fi
+              rmdir -- "$dir" || break
+              echo "Leeres Verzeichnis entfernt: $dir"
+              dir=$(dirname -- "$dir")
+            done
+          }
+
+          old_manifest=$(mktemp)
+          paths_file=$(mktemp)
+          new_manifest=$(mktemp)
+          unsorted=$(mktemp)
+          trap 'rm -f "$old_manifest" "$paths_file" "$new_manifest" "$unsorted"; rm -rf _verteiler_temp' EXIT
+
+          # Vor dem Kopieren sichern. Ein späteres rsync darf diese Datei nicht ersetzen.
+          if [ -f "$MANIFEST" ]; then
+            sed 's/\r$//' "$MANIFEST" | sort -u > "$old_manifest"
+            had_manifest=1
+          else
+            had_manifest=0
+            : > "$old_manifest"
+          fi
+
+          (
+            cd _verteiler_temp || exit 1
+            find . -type f "${find_args[@]}" -print0 | sort -z > "$paths_file"
+          )
+
+          : > "$unsorted"
+          while IFS= read -r -d '' path; do
+            rel=${path#./}
+            case "$rel" in
+              *$'\n'*)
+                echo "Pfad enthält einen Zeilenumbruch und wird nicht verteilt." >&2
+                exit 1
+                ;;
+            esac
+            printf '%s\n' "$rel" >> "$unsorted"
+          done < "$paths_file"
+          sort -u -o "$new_manifest" "$unsorted"
+
+          while IFS= read -r path || [ -n "$path" ]; do
+            [ -z "$path" ] && continue
+            if is_excluded_path "$path"; then
+              echo "Ausschlussliste hat den Pfad nicht gefiltert: $path" >&2
+              exit 1
+            fi
+          done < "$new_manifest"
+
+          # Kein --delete: Dateien, die nur im Ziel liegen, bleiben.
+          # -m lässt leere Ordner weg, die nur ausgeschlossene Dateien enthalten.
+          # Wegfall im Verteiler räumt danach ausschließlich das Manifest auf.
+          rsync -avm "${rsync_args[@]}" _verteiler_temp/ ./
           rm -rf _verteiler_temp
 
-          
-      # --- TEIL 1: ALLE Commit-Nachrichten dieses Pushes holen ---
+          mv "$new_manifest" "$MANIFEST"
+
+          removed=0
+          if [ "$had_manifest" -eq 0 ]; then
+            echo "Kein bisheriges .verteiler-manifest. Es wird nichts gelöscht."
+          else
+            while IFS= read -r path || [ -n "$path" ]; do
+              [ -z "$path" ] && continue
+              if unsafe_path "$path"; then
+                echo "Unsicherer Pfad, nicht entfernt: $path"
+                continue
+              fi
+              if is_protected "$path"; then
+                echo "Geschützt, nicht entfernt: $path"
+                continue
+              fi
+              if [ -d "$path" ] && [ ! -L "$path" ]; then
+                echo "Verzeichnis im Manifest, nicht entfernt: $path"
+                continue
+              fi
+              present=0
+              if [ -e "$path" ] || [ -L "$path" ]; then
+                present=1
+              elif git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+                present=1
+              fi
+              if [ "$present" -eq 0 ]; then
+                echo "Bereits fehlend, übersprungen: $path"
+                continue
+              fi
+              git rm -q -f --ignore-unmatch -- "$path"
+              if [ -e "$path" ] || [ -L "$path" ]; then
+                echo "Nicht im Index, Datei bleibt liegen: $path"
+                continue
+              fi
+              echo "Entfernt: $path"
+              removed=$((removed + 1))
+              cleanup_empty_parents "$path"
+            done < <(comm -23 "$old_manifest" "$MANIFEST")
+            if [ "$removed" -eq 0 ]; then
+              echo "Keine Dateien entfernt."
+            fi
+          fi
+
+          count=$(wc -l < "$MANIFEST" | tr -d ' ')
+          echo "Manifest geschrieben: ${MANIFEST} (${count} Dateien)."
+
+      # --- TEIL 1: Betreffzeilen der Commits dieses Pushes ---
       - name: Get Commit Messages and Date
         id: vars
         env:
@@ -58,24 +243,33 @@ jobs:
           EVENT_BEFORE: ${{ github.event.before }}
           EVENT_SHA: ${{ github.sha }}
         run: |
-          # Prüfen ob Event-Daten vorhanden sind, um ALLE Commits des Pushes zu erfassen.
+          # Nur die Betreffzeile (%s). Rumpf und Co-authored-by bleiben draußen.
           # Leeres before (manueller Lauf) und die Null-SHA fallen auf die letzten drei Commits zurück.
           if [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ] && [ -n "$EVENT_BEFORE" ]; then
-            git log "$EVENT_BEFORE".."$EVENT_SHA" --no-merges --pretty=%B > msg.txt || git log -3 --no-merges --pretty=%B > msg.txt
+            git log "$EVENT_BEFORE".."$EVENT_SHA" --no-merges --pretty=%s > msg.txt || git log -3 --no-merges --pretty=%s > msg.txt
           else
-            git log -3 --no-merges --pretty=%B > msg.txt
+            git log -3 --no-merges --pretty=%s > msg.txt
           fi
-          
+
+          filtered=$(mktemp)
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+              "chore: auto-update changelog"*)
+                continue
+                ;;
+              "")
+                continue
+                ;;
+            esac
+            printf '%s\n' "$line"
+          done < msg.txt > "$filtered"
+          mv "$filtered" msg.txt
+
           DATE=$(date +"%d.%m.%Y")
           BUILD=$(date +"%Y%m%d_%H%M")
           {
             echo "date=$DATE"
             echo "build=$BUILD"
-            # Mehrzeilige Originaltexte; das Trennwort kommt nicht im Skript vor.
-            DELIM="MSG$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-            echo "message<<${DELIM}"
-            cat msg.txt
-            echo "${DELIM}"
           } >> "$GITHUB_OUTPUT"
 
       # --- TEIL 3: MD und HTML generieren ---
@@ -83,54 +277,61 @@ jobs:
         env:
           DATE: ${{ steps.vars.outputs.date }}
           BUILD: ${{ steps.vars.outputs.build }}
-          ENTRY: ${{ steps.vars.outputs.message }}
         run: |
-          # Sicherstellen, dass grep nicht abstürzt, wenn es das Tag nicht findet
-          CAT_EXTRACT=$(echo "$ENTRY" | grep -oE "\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]" | head -n 1 || true)
-          CAT=$(echo "$CAT_EXTRACT" | tr -d '[]')
-          
-          if [ -z "$CAT" ]; then
-            CAT="GEÄNDERT"
-          fi
-          
-          CLEAN_TEXT=$(echo "$ENTRY" | sed -E 's/^\[[^]]+\][[:space:]]*//')
-          
-          # Build-Nummer direkt neben der Kategorie einfügen
-          NEW_LINE="* **$CAT** (Build $BUILD): $CLEAN_TEXT"
-          
-          if [ ! -f CHANGELOG.md ]; then
-            echo "# Changelog" > CHANGELOG.md
-          fi
+          ensure_bom() {
+            if [ -f CHANGELOG.md ] && [ "$(head -c 3 CHANGELOG.md)" != $'\xEF\xBB\xBF' ]; then
+              { printf '\xEF\xBB\xBF'; cat CHANGELOG.md; } > temp.md
+              mv temp.md CHANGELOG.md
+            fi
+          }
 
-          # Eintrag in eine Datei, damit awk Backslashes im Originaltext nicht als Escape liest.
-          printf '%s\n' "$NEW_LINE" > entry_line.txt
-          if grep -q "## $DATE" CHANGELOG.md; then
-            awk -v date="## $DATE" '
-              $0 == date {
-                print
-                while ((getline line < "entry_line.txt") > 0) print line
-                close("entry_line.txt")
-                next
-              }
-              { print }
-            ' CHANGELOG.md > temp.md && mv temp.md CHANGELOG.md
+          : > entry_line.txt
+          while IFS= read -r SUBJECT || [ -n "$SUBJECT" ]; do
+            [ -z "$SUBJECT" ] && continue
+            CAT_EXTRACT=$(printf '%s\n' "$SUBJECT" | grep -oE '\[(NEU|GEÄNDERT|ENTFERNT|BEHOBEN)\]' | head -n 1 || true)
+            CAT=$(printf '%s' "$CAT_EXTRACT" | tr -d '[]')
+            if [ -z "$CAT" ]; then
+              CAT="GEÄNDERT"
+            fi
+            CLEAN_TEXT=$(printf '%s\n' "$SUBJECT" | sed -E 's/^\[[^]]+\][[:space:]]*//')
+            printf '* **%s** (Build %s): %s\n' "$CAT" "$BUILD" "$CLEAN_TEXT" >> entry_line.txt
+          done < msg.txt
+
+          if [ ! -s entry_line.txt ]; then
+            echo "Keine Changelog-Einträge."
+            if [ ! -f CHANGELOG.md ]; then
+              printf '# Changelog\n' > CHANGELOG.md
+              ensure_bom
+            fi
           else
-            {
-              echo "# Changelog"
-              echo
-              echo "## $DATE"
-              cat entry_line.txt
-              echo
-              tail -n +2 CHANGELOG.md
-            } > temp.md && mv temp.md CHANGELOG.md
-          fi
-          rm -f entry_line.txt
+            if [ ! -f CHANGELOG.md ]; then
+              printf '# Changelog\n' > CHANGELOG.md
+            fi
 
-          # .editorconfig setzt charset=utf-8-bom für alles außer YAML.
-          # Die Shell schreibt sonst UTF-8 ohne BOM.
-          if [ "$(head -c 3 CHANGELOG.md)" != $'\xEF\xBB\xBF' ]; then
-            { printf '\xEF\xBB\xBF'; cat CHANGELOG.md; } > temp.md && mv temp.md CHANGELOG.md
+            # Einträge stehen zeilenweise in der Datei, damit awk Backslashes nicht als Escape liest.
+            if grep -F -q -e "## $DATE" CHANGELOG.md; then
+              awk -v date="## $DATE" '
+                $0 == date {
+                  print
+                  while ((getline line < "entry_line.txt") > 0) print line
+                  close("entry_line.txt")
+                  next
+                }
+                { print }
+              ' CHANGELOG.md > temp.md && mv temp.md CHANGELOG.md
+            else
+              {
+                echo "# Changelog"
+                echo
+                echo "## $DATE"
+                cat entry_line.txt
+                echo
+                tail -n +2 CHANGELOG.md
+              } > temp.md && mv temp.md CHANGELOG.md
+            fi
+            ensure_bom
           fi
+          rm -f entry_line.txt msg.txt temp.md
 
       - name: Generate CHANGELOG.html
         run: |
@@ -290,17 +491,17 @@ jobs:
           git config user.name "NudlDudl Bot"
           git config user.email "nudldudl.bot@users.noreply.github.com"
           
-          git add CHANGELOG.md CHANGELOG.html
-          if [ -f "global_settings.php" ]; then git add global_settings.php; fi
-          if [ -f "global_config.php" ]; then git add global_config.php; fi
-          
-          # Alle dynamisch kopierten Dateien aus dem Verteiler ins Git aufnehmen
-          if [ -f "verteiler_files.txt" ]; then
-            while read -r file; do
-              clean_file=${file#./}
-              git add "$clean_file"
-            done < verteiler_files.txt
-            rm verteiler_files.txt
+          git add -- CHANGELOG.md CHANGELOG.html
+          if [ -f "global_settings.php" ]; then git add -- global_settings.php; fi
+          if [ -f "global_config.php" ]; then git add -- global_config.php; fi
+
+          # Manifest und genau die zuletzt verteilten Dateien. Löschungen sind schon per git rm gestaged.
+          if [ -f ".verteiler-manifest" ]; then
+            while IFS= read -r file || [ -n "$file" ]; do
+              [ -z "$file" ] && continue
+              git add -- "$file"
+            done < .verteiler-manifest
+            git add -- .verteiler-manifest
           fi
           
           if ! git diff --staged --quiet; then
